@@ -557,50 +557,37 @@ Returns a list of highlights, where each element is a list:
                   (delete-region heading-start heading-end)
                   (insert expected-heading))
                 (message "DEBUG: Updated headline highlight: %s" original-hl-id))
-               ('list
+               ((or 'list 'description)
                 (beginning-of-line)
                 (let ((line-start (point)))
                   (forward-line 1)
                   (let ((line-end (point)))
                     (delete-region line-start line-end) ; Delete the old line
-                    (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc 'list))
-                    (message "DEBUG: Updated list highlight: %s" original-hl-id)))
-               ('description
-                (beginning-of-line)
-                (let ((line-start (point)))
-                  (forward-line 1)
-                  (let ((line-end (point)))
-                    (delete-region line-start line-end) ; Delete the old line
-                    (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc 'description))
-                    (message "DEBUG: Updated description highlight: %s" original-hl-id)))))))
-         (widen))
+                    (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc org-zettel-ref-highlight-format))
+                    (message "DEBUG: Updated %s highlight: %s" org-zettel-ref-highlight-format original-hl-id)))))))
+        (widen))
         
         ;; --- If not found, create new ---
         (unless found-existing
-         (save-excursion
-           (goto-char source-heading-point)
-           (org-back-to-heading t)
-           (org-end-of-subtree)
-           (unless (bolp) (insert "\n"))
-           
-           (pcase org-zettel-ref-highlight-format
-             ('headline
-              (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc 'headline))
-              (org-entry-put nil "SOURCE_REF_ID" (org-entry-get source-heading-point "REF_ID"))
-              (org-entry-put nil "ORIGINAL_HL_ID" original-hl-id)
-              (when (and (eq hl-type-sym 'image) hl-img-path)
-                (insert (format "\n#+ATTR_ORG: :width 300\n[[file:%s]]\n" hl-img-path)))
-              (message "DEBUG: Created new headline highlight: %s" original-hl-id))
-             ('list
-              (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc 'list))
-              (when (and (eq hl-type-sym 'image) hl-img-path)
-                (insert (format "  #+ATTR_ORG: :width 300\n  [[file:%s]]\n" hl-img-path)))
-              (message "DEBUG: Created new list highlight: %s" original-hl-id))
-             ('description
-              (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc 'description))
-              (when (and (eq hl-type-sym 'image) hl-img-path)
-                (insert (format "  #+ATTR_ORG: :width 300\n  [[file:%s]]\n" hl-img-path)))
-              (message "DEBUG: Created new description highlight: %s" original-hl-id))))))))))
+        (save-excursion
+          (goto-char source-heading-point)
+          (org-back-to-heading t)
+          (org-end-of-subtree)
+          (unless (bolp) (insert "\n"))
+          
+          (pcase org-zettel-ref-highlight-format
+            ('headline
+             (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc 'headline))
+             (org-entry-put nil "SOURCE_REF_ID" (org-entry-get source-heading-point "REF_ID"))
+             (org-entry-put nil "ORIGINAL_HL_ID" original-hl-id)
+             (when (and (eq hl-type-sym 'image) hl-img-path)
+               (insert (format "\n#+ATTR_ORG: :width 300\n[[file:%s]]\n" hl-img-path)))
+             (message "DEBUG: Created new headline highlight: %s" original-hl-id))
+            ((or 'list 'description)
+             (insert (org-zettel-ref--format-highlight-entry original-hl-id hl-type-sym hl-text-content hl-type-name hl-prefix hl-img-path hl-img-desc org-zettel-ref-highlight-format))
+             (when (and (eq hl-type-sym 'image) hl-img-path)
+               (insert (format "  #+ATTR_ORG: :width 300\n  [[file:%s]]\n" hl-img-path)))
+             (message "DEBUG: Created new %s highlight: %s" org-zettel-ref-highlight-format original-hl-id)))))))))
 
 (defun org-zettel-ref--remove-all-ref-id-content (source-ref-id)
   "Remove all content related to the specified REF_ID from the overview file.

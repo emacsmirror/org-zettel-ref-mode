@@ -851,7 +851,8 @@ For example: Stallman__GNUEmacs==editor_lisp--reading-3.org"
                               (file-name-nondirectory new-file-path)))
                   (error
                    (message "Error during rename: %s" (error-message-string err))))
-                (org-zettel-ref-watch-directory)))))))))
+                ;; 使用计时器重新启动文件监控，避免在文件操作过程中触发监控
+                (run-with-timer 0.5 nil #'org-zettel-ref-watch-directory)))))))))
 
 (defun org-zettel-ref-list-goto-column ()
   "Prompt for a column and move cursor to it."
@@ -921,6 +922,8 @@ For example: Stallman__GNUEmacs==editor_lisp--reading-3.org"
 
               (when (and (not (equal file new-filepath))
                         (y-or-n-p (format "Rename file to %s?" new-filename)))
+                ;; 暂停文件监控以避免递归调用
+                (org-zettel-ref-unwatch-directory)
                 ;; Rename file
                 (condition-case err
                     (rename-file file new-filepath t)
@@ -943,12 +946,14 @@ For example: Stallman__GNUEmacs==editor_lisp--reading-3.org"
                   (when-let* ((buf (get-file-buffer file)))
                     (with-current-buffer buf
                       (set-visited-file-name new-filepath)
-                      (set-buffer-modified-p nil))))))))))
+                      (set-buffer-modified-p nil))))
+                ;; 使用计时器重新启动文件监控
+                (run-with-timer 0.5 nil #'org-zettel-ref-watch-directory))))))
     ;; Save database and refresh display
     (org-zettel-ref-db-save db)
     (org-zettel-ref-list-refresh)
     (org-zettel-ref-unmark-all)
-    (message "Keywords updated successfully"))
+    (message "Keywords updated successfully"))))
 
 
 ;;;-------------------------------------------------------------------------
@@ -1110,11 +1115,6 @@ Example: (t 'source \"Deleted source file only.\") or (nil 'error \"Error messag
       (message "Deletion complete: %d source(s) only, %d overview(s) only, %d both, %d error(s)."
                deleted-source deleted-overview deleted-both errors))))
 
-
-;;;----------------------------------------------------------------------------
-;;; List Panel Operations
-;;;----------------------------------------------------------------------------
-
 (defun org-zettel-ref-list-cycle-status ()
   "Cycle through reading status for the current entry."
   (interactive)
@@ -1164,7 +1164,7 @@ Example: (t 'source \"Deleted source file only.\") or (nil 'error \"Error messag
                 (org-zettel-ref-update-overview-source-file db ref-id file new-file)
                 
                 ;; Update any open buffer
-                (when-let ((buf (get-file-buffer file)))
+                (when-let* ((buf (get-file-buffer file)))
                   (with-current-buffer buf
                     (set-visited-file-name new-file)
                     (set-buffer-modified-p nil)))
@@ -1175,8 +1175,8 @@ Example: (t 'source \"Deleted source file only.\") or (nil 'error \"Error messag
             (error
              (message "Error updating status: %s" (error-message-string err))))
 
-          ;; Resume file monitoring
-          (org-zettel-ref-watch-directory))))))
+          ;; 使用计时器重新启动文件监控
+          (run-with-timer 0.5 nil #'org-zettel-ref-watch-directory))))))
 
 (defun org-zettel-ref-list-set-rating (rating)
   "Set rating for the current entry.
@@ -1223,7 +1223,7 @@ RATING should be a number between 0 and 5."
                 (org-zettel-ref-update-overview-source-file db ref-id file new-file)
                 
                 ;; Update any open buffer
-                (when-let ((buf (get-file-buffer file)))
+                (when-let* ((buf (get-file-buffer file)))
                   (with-current-buffer buf
                     (set-visited-file-name new-file)
                     (set-buffer-modified-p nil)))
@@ -1234,8 +1234,8 @@ RATING should be a number between 0 and 5."
             (error
              (message "Error updating rating: %s" (error-message-string err))))
 
-          ;; Resume file monitoring
-          (org-zettel-ref-watch-directory))))))
+          ;; 使用计时器重新启动文件监控
+          (run-with-timer 0.5 nil #'org-zettel-ref-watch-directory))))))
 
 
 ;;;----------------------------------------------------------------------------
@@ -1400,7 +1400,8 @@ RATING should be a number between 0 and 5."
       (when (and file
                  (stringp file)
                  (string-match-p "\\.org$" file)
-                 (not (string-match-p "^\\." (file-name-nondirectory file))))
+                 (not (string-match-p "^\\." (file-name-nondirectory file)))
+                 (not org-zettel-ref-scanning-directory)) ; 防止递归调用
         ;; Rescan the reference directory and update the database
         (let ((db (org-zettel-ref-ensure-db)))
           (org-zettel-ref-scan-directory db))
@@ -1450,57 +1451,59 @@ DB is the database object."
         (added 0))
     (message "Found %d files to process" (length files))
     
-    (dolist (file files)
-      (let* ((file-path (expand-file-name file))
-             (ref-id (org-zettel-ref-db-get-ref-id-by-path db file-path)))
-        (if ref-id
-            ;; Existing file - check if it needs update
-            (let* ((entry (org-zettel-ref-db-get-ref-entry db ref-id))
-                   (db-mtime (org-zettel-ref-ref-entry-modified entry))
-                   (file-mtime (file-attribute-modification-time 
-                              (file-attributes file-path))))
-              (if (and db-mtime 
-                      (not (time-less-p db-mtime file-mtime)))
-                  (cl-incf skip-count)  ; File not modified - skip
-                ;; File modified - update entry
-                (let* ((file-name (file-name-nondirectory file))
-                      (parsed-info (org-zettel-ref-parse-filename file-name))
-                      (title (nth 1 parsed-info))
-                      (author (nth 0 parsed-info))
-                      (keywords (nth 2 parsed-info))
-                      (status (or (nth 3 parsed-info) 'unread))
-                      (rating (or (nth 4 parsed-info) 0)))
-                  ;; Update entry fields but keep the ID
-                  (setf (org-zettel-ref-ref-entry-title entry) title
-                        (org-zettel-ref-ref-entry-author entry) author
-                        (org-zettel-ref-ref-entry-keywords entry) keywords
-                        (org-zettel-ref-ref-entry-read-status entry) status
-                        (org-zettel-ref-ref-entry-rating entry) rating
-                        (org-zettel-ref-ref-entry-modified entry) (current-time))
-                  (cl-incf update-count))))
-          ;; New file - create entry
-          (let* ((file-name (file-name-nondirectory file))
-                 (parsed-info (org-zettel-ref-parse-filename file-name))
-                 (title (nth 1 parsed-info))
-                 (author (nth 0 parsed-info))
-                 (keywords (nth 2 parsed-info))
-                 (status (or (nth 3 parsed-info) 'unread))
-                 (rating (or (nth 4 parsed-info) 0))
-                 (entry.id (org-zettel-ref-db-ensure-ref-entry 
-                          db file-path title author keywords status rating)))
-            (cl-incf new-count)
-            (cl-incf added)
-            
-            ;; Save database every 100 entries
-            (when (zerop (mod added 100))
-              (message "Saving database after %d new entries..." added)
-              (org-zettel-ref-db-save db))))))
-    
-    (message "Scan complete: %d new, %d updated, %d unchanged"
-             new-count update-count skip-count)
-    ;; Final save if there are any changes
-    (when (or (> new-count 0) (> update-count 0))
-      (org-zettel-ref-db-save db))))
+    ;; 设置标志防止递归调用
+    (let ((org-zettel-ref-scanning-directory t))
+      (dolist (file files)
+        (let* ((file-path (expand-file-name file))
+               (ref-id (org-zettel-ref-db-get-ref-id-by-path db file-path)))
+          (if ref-id
+              ;; Existing file - check if it needs update
+              (let* ((entry (org-zettel-ref-db-get-ref-entry db ref-id))
+                     (db-mtime (org-zettel-ref-ref-entry-modified entry))
+                     (file-mtime (file-attribute-modification-time 
+                                (file-attributes file-path))))
+                (if (and db-mtime 
+                        (not (time-less-p db-mtime file-mtime)))
+                    (cl-incf skip-count)  ; File not modified - skip
+                  ;; File modified - update entry
+                  (let* ((file-name (file-name-nondirectory file))
+                        (parsed-info (org-zettel-ref-parse-filename file-name))
+                        (title (nth 1 parsed-info))
+                        (author (nth 0 parsed-info))
+                        (keywords (nth 2 parsed-info))
+                        (status (or (nth 3 parsed-info) 'unread))
+                        (rating (or (nth 4 parsed-info) 0)))
+                    ;; Update entry fields but keep the ID
+                    (setf (org-zettel-ref-ref-entry-title entry) title
+                          (org-zettel-ref-ref-entry-author entry) author
+                          (org-zettel-ref-ref-entry-keywords entry) keywords
+                          (org-zettel-ref-ref-entry-read-status entry) status
+                          (org-zettel-ref-ref-entry-rating entry) rating
+                          (org-zettel-ref-ref-entry-modified entry) (current-time))
+                    (cl-incf update-count))))
+            ;; New file - create entry
+            (let* ((file-name (file-name-nondirectory file))
+                   (parsed-info (org-zettel-ref-parse-filename file-name))
+                   (title (nth 1 parsed-info))
+                   (author (nth 0 parsed-info))
+                   (keywords (nth 2 parsed-info))
+                   (status (or (nth 3 parsed-info) 'unread))
+                   (rating (or (nth 4 parsed-info) 0))
+                   (entry.id (org-zettel-ref-db-ensure-ref-entry 
+                            db file-path title author keywords status rating)))
+              (cl-incf new-count)
+              (cl-incf added)
+              
+              ;; Save database every 100 entries
+              (when (zerop (mod added 100))
+                (message "Saving database after %d new entries..." added)
+                (org-zettel-ref-db-save db))))))
+      
+      (message "Scan complete: %d new, %d updated, %d unchanged"
+               new-count update-count skip-count)
+      ;; Final save if there are any changes
+      (when (or (> new-count 0) (> update-count 0))
+        (org-zettel-ref-db-save db)))))
 
 ;;;----------------------------------------------------------------------------
 ;;; File Operation: Remove Invalid Entries
@@ -1600,6 +1603,9 @@ Return a list of file paths."
 
 (defvar org-zettel-ref-file-watch-descriptor nil
   "File monitoring descriptor.")
+
+(defvar org-zettel-ref-scanning-directory nil
+  "Flag to prevent recursive directory scanning.")
 
 (defun org-zettel-ref-watch-directory ()
   "Start monitoring changes in the reference file directory."

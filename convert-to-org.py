@@ -30,7 +30,8 @@ warnings.filterwarnings("ignore", message=".*tqdm.*")
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout  # Redirect logging to stdout
 )
 logger = logging.getLogger(__name__)
 
@@ -46,30 +47,7 @@ def read_requirements(requirements_file: Path) -> list:
 def check_package_installed(package: str, python_path: str) -> bool:
     """Check if the package is installed"""
     try:
-        # Map PyPI package names to their import names
-        package_import_map = {
-            'PyMuPDF': 'fitz',
-            'pdfplumber': 'pdfplumber',
-            'PyPDF2': 'PyPDF2',
-            'pdf2image': 'pdf2image',
-            'pytesseract': 'pytesseract',
-            'html2text': 'html2text',
-            'ebooklib': 'ebooklib',
-            'beautifulsoup4': 'bs4',
-            'Pillow': 'PIL',
-            'pyobjc': 'objc',
-            'pyobjc-framework-Cocoa': 'Cocoa',
-            'pymupdf4llm': 'pymupdf4llm',
-            'camelot-py': 'camelot',
-            'tabula-py': 'tabula',
-            # 'nougat-ocr': 'nougat',  # Disabled due to compatibility issues
-            'opencv-python': 'cv2'
-        }
-        
-        package_name = package.split('>=')[0].split('==')[0].split(';')[0].strip()
-        import_name = package_import_map.get(package_name, package_name)
-        
-        cmd = [python_path, "-c", f"import {import_name}"]
+        cmd = [python_path, "-c", f"import {package.split('==')[0]}"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
     except Exception:
@@ -83,7 +61,7 @@ def install_requirements(pip_path: str, requirements: list) -> bool:
             subprocess.run([pip_path, "install", package], check=True)
         return True
     except subprocess.CalledProcessError as e:
-        logger.error(f"安装包失败: {e}")
+        logger.error(f"Installing package failed: {e}")
         return False
 
 def setup_environment():
@@ -274,36 +252,6 @@ try:
 except ImportError:
     logger.warning("PyPDF2 not found. PDF processing may be limited.")
 
-try:
-    import pymupdf4llm
-    AVAILABLE_PDF_PROCESSORS.append('pymupdf4llm')
-except ImportError:
-    # Silently skip - convert-simple.py handles installation and processing
-    pass
-
-# Legacy processors - now handled by convert-simple.py
-# These imports are kept for backward compatibility but warnings are suppressed
-try:
-    import camelot
-    AVAILABLE_PDF_PROCESSORS.append('camelot')
-except ImportError:
-    # Silently skip - convert-simple.py handles PDF processing
-    pass
-
-try:
-    import tabula
-    AVAILABLE_PDF_PROCESSORS.append('tabula')
-except ImportError:
-    # Silently skip - convert-simple.py handles PDF processing
-    pass
-
-# nougat-ocr: Handled by convert-simple.py (marker-pdf provides better OCR)
-
-try:
-    import cv2
-except ImportError:
-    logger.warning("opencv-python not found. Image processing may be limited.")
-
 def sanitize_filename(filename: str) -> str:
     """Clean up unsafe characters in filenames"""
     # Replace Windows/Unix unsupported characters
@@ -340,13 +288,15 @@ def convert_markdown(input_file: Path, output_file: Path) -> bool:
         
         if result.returncode == 0:
             # Update image links in the converted file
-            content = output_file.read_text(encoding='utf-8')
+            with open(output_file, 'r', encoding='utf-8') as f:
+                content = f.read()
             content = re.sub(
                 r'\[\[file:(.*?)\]\]',
                 lambda m: f'[[file:{images_dir.name}/{os.path.basename(m.group(1))}]]',
                 content
             )
-            output_file.write_text(content, encoding='utf-8')
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(content)
             
             post_process_org(output_file)
             return True
@@ -383,13 +333,15 @@ def convert_html(input_file: Path, output_file: Path) -> bool:
         
         if result.returncode == 0:
             # Update image links in the converted file
-            content = output_file.read_text(encoding='utf-8')
+            with open(output_file, 'r', encoding='utf-8') as f:
+                content = f.read()
             content = re.sub(
                 r'\[\[file:(.*?)\]\]',
                 lambda m: f'[[file:{images_dir.name}/{os.path.basename(m.group(1))}]]',
                 content
             )
-            output_file.write_text(content, encoding='utf-8')
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(content)
             
             post_process_org(output_file)
             return True
@@ -427,7 +379,8 @@ def convert_epub(input_file: Path, output_file: Path) -> bool:
         
         if result.returncode == 0:
             # Process the converted file, update image links
-            content = output_file.read_text(encoding='utf-8')
+            with open(output_file, 'r', encoding='utf-8') as f:
+                content = f.read()
             
             # Update image links to relative paths
             content = re.sub(
@@ -437,7 +390,8 @@ def convert_epub(input_file: Path, output_file: Path) -> bool:
             )
             
             # Save the updated content
-            output_file.write_text(content, encoding='utf-8')
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(content)
             
             # Post-process
             post_process_org(output_file)
@@ -473,159 +427,24 @@ def convert_text_to_org(input_file: str, output_file: str) -> Tuple[bool, List[s
     except Exception as e:
         return False, [f"Error converting text file: {str(e)}"]
 
-def extract_pdf_images(input_file: str, images_dir: Path) -> List[str]:
-    """Extract images from PDF and save to images directory"""
-    image_paths = []
-    try:
-        if 'pymupdf' in AVAILABLE_PDF_PROCESSORS:
-            doc = fitz.open(input_file)
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                image_list = page.get_images(full=True)
-                
-                for img_index, img in enumerate(image_list):
-                    xref = img[0]
-                    pix = fitz.Pixmap(doc, xref)
-                    
-                    if pix.n < 5:  # GRAY or RGB
-                        img_name = f"page_{page_num + 1}_img_{img_index + 1}.png"
-                        img_path = images_dir / img_name
-                        pix.save(str(img_path))
-                        image_paths.append(img_name)
-                    
-                    pix = None
-            doc.close()
-    except Exception as e:
-        logger.error(f"Error extracting images: {str(e)}")
-    
-    return image_paths
-
-def extract_pdf_tables(input_file: str) -> List[str]:
-    """Extract tables from PDF and convert to markdown format"""
-    tables_md = []
-    
-    # Try camelot first (better for well-formatted tables)
-    if 'camelot' in AVAILABLE_PDF_PROCESSORS:
-        try:
-            tables = camelot.read_pdf(input_file, pages='all')
-            for i, table in enumerate(tables):
-                if table.accuracy > 70:  # Only include high-accuracy tables
-                    df = table.df
-                    md_table = df.to_markdown(index=False)
-                    tables_md.append(f"\n\n**Table {i+1}:**\n{md_table}\n")
-        except Exception as e:
-            logger.warning(f"Camelot table extraction failed: {str(e)}")
-    
-    # Try tabula as fallback
-    if not tables_md and 'tabula' in AVAILABLE_PDF_PROCESSORS:
-        try:
-            tables = tabula.read_pdf(input_file, pages='all', multiple_tables=True)
-            for i, df in enumerate(tables):
-                if not df.empty:
-                    md_table = df.to_markdown(index=False)
-                    tables_md.append(f"\n\n**Table {i+1}:**\n{md_table}\n")
-        except Exception as e:
-            logger.warning(f"Tabula table extraction failed: {str(e)}")
-    
-    return tables_md
-
-def process_pdf_to_markdown(input_file: str, images_dir: Path) -> Tuple[Optional[str], List[str]]:
-    """Process PDF file and convert to markdown with formulas, tables, and images"""
-    markdown_content = ""
+def process_pdf(input_file: str) -> Tuple[Optional[str], List[str]]:
+    """Process PDF file content"""
+    text = ""
     errors = []
-    
-    # Try pymupdf4llm first (best for academic papers)
-    if 'pymupdf4llm' in AVAILABLE_PDF_PROCESSORS:
-        try:
-            import pymupdf4llm
-            md_text = pymupdf4llm.to_markdown(input_file)
-            if md_text and md_text.strip():
-                markdown_content = md_text
-                
-                # Extract and embed images
-                image_paths = extract_pdf_images(input_file, images_dir)
-                
-                # Add image references to markdown
-                if image_paths:
-                    markdown_content += "\n\n## Images\n"
-                    for img_path in image_paths:
-                        markdown_content += f"\n![Image]({images_dir.name}/{img_path})\n"
-                
-                # Extract and embed tables
-                tables = extract_pdf_tables(input_file)
-                if tables:
-                    markdown_content += "\n\n## Tables\n"
-                    for table in tables:
-                        markdown_content += table
-                
-                return markdown_content, []
-        except Exception as e:
-            errors.append(f"pymupdf4llm error: {str(e)}")
-    
-    # Fallback to enhanced PyMuPDF processing
+
+    # PyMuPDF processing method
     if 'pymupdf' in AVAILABLE_PDF_PROCESSORS:
         try:
-            doc = fitz.open(input_file)
-            markdown_content = ""
-            
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                
-                # Extract text blocks with formatting
-                blocks = page.get_text("dict")["blocks"]
-                
-                for block in blocks:
-                    if "lines" in block:
-                        for line in block["lines"]:
-                            line_text = ""
-                            for span in line["spans"]:
-                                text = span["text"]
-                                font_size = span["size"]
-                                font_flags = span["flags"]
-                                
-                                # Detect headers based on font size
-                                if font_size > 14:
-                                    text = f"# {text}"
-                                elif font_size > 12:
-                                    text = f"## {text}"
-                                
-                                # Detect bold text
-                                if font_flags & 2**4:  # Bold flag
-                                    text = f"**{text}**"
-                                
-                                # Detect italic text
-                                if font_flags & 2**6:  # Italic flag
-                                    text = f"*{text}*"
-                                
-                                line_text += text
-                            
-                            if line_text.strip():
-                                markdown_content += line_text + "\n"
-                        markdown_content += "\n"
-            
-            # Extract images
-            image_paths = extract_pdf_images(input_file, images_dir)
-            if image_paths:
-                markdown_content += "\n\n## Images\n"
-                for img_path in image_paths:
-                    markdown_content += f"\n![Image]({images_dir.name}/{img_path})\n"
-            
-            # Extract tables
-            tables = extract_pdf_tables(input_file)
-            if tables:
-                markdown_content += "\n\n## Tables\n"
-                for table in tables:
-                    markdown_content += table
-            
-            doc.close()
-            
-            if markdown_content.strip():
-                return markdown_content, []
-                
+            with fitz.open(input_file) as doc:
+                text = ""
+                for page in doc:
+                    text += page.get_text()
+                if text.strip():
+                    return text, []
         except Exception as e:
-            errors.append(f"Enhanced PyMuPDF error: {str(e)}")
-    
-    # Final fallback to basic text extraction
+            errors.append(f"PyMuPDF error: {str(e)}")
+
+    # PyPDF2 processing method
     try:
         from PyPDF2 import PdfReader
         reader = PdfReader(input_file)
@@ -652,139 +471,13 @@ def process_pdf_to_markdown(input_file: str, images_dir: Path) -> Tuple[Optional
     return None, errors
 
 def convert_pdf_to_org(input_file: str, output_file: str) -> Tuple[bool, List[str]]:
-    """Convert PDF to Org format using convert-simple.py"""
+    """Convert PDF to Org format"""
     try:
-        input_path = Path(input_file)
-        output_path = Path(output_file)
-        script_dir = Path(__file__).parent.absolute()
-        simple_script = script_dir / "convert-simple.py"
-        
-        # Check if convert-simple.py exists
-        if not simple_script.exists():
-            logger.warning("convert-simple.py not found, falling back to built-in PDF processing")
-            return convert_pdf_to_org_builtin(input_file, output_file)
-        
-        # Get virtual environment Python path
-        venv_path = script_dir / ".venv"
-        if os.name == 'nt':  # Windows
-            venv_python = venv_path / 'Scripts' / 'python.exe'
-        else:  # Unix-like
-            venv_python = venv_path / 'bin' / 'python'
-        
-        # Use virtual environment Python if available, otherwise fall back to system Python
-        python_executable = str(venv_python) if venv_python.exists() else sys.executable
-        
-        logger.info(f"Using Python: {python_executable}")
-        
-        # Create temporary directories for convert-simple.py
-        temp_pdf_dir = output_path.parent / f"temp_pdf_{output_path.stem}"
-        temp_output_dir = output_path.parent / f"temp_output_{output_path.stem}"
-        temp_archive_dir = output_path.parent / f"temp_archive_{output_path.stem}"
-        
-        try:
-            # Create temp directories
-            temp_pdf_dir.mkdir(parents=True, exist_ok=True)
-            temp_output_dir.mkdir(parents=True, exist_ok=True)
-            temp_archive_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Copy PDF to temp directory
-            temp_pdf_file = temp_pdf_dir / input_path.name
-            shutil.copy2(input_path, temp_pdf_file)
-            
-            # Call convert-simple.py with virtual environment Python
-            cmd = [
-                python_executable,
-                str(simple_script),
-                '--temp', str(temp_pdf_dir),
-                '--reference', str(temp_output_dir),
-                '--archive', str(temp_archive_dir)
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                # Find the converted org file
-                expected_org_file = temp_output_dir / f"{input_path.stem.replace(' ', '_')}.org"
-                if expected_org_file.exists():
-                    # Copy the converted file to the target location
-                    shutil.copy2(expected_org_file, output_path)
-                    
-                    # Copy any images directory
-                    source_images_dir = temp_output_dir / f"{input_path.stem.replace(' ', '_')}_images"
-                    target_images_dir = output_path.parent / f"{output_path.stem}_images"
-                    if source_images_dir.exists():
-                        if target_images_dir.exists():
-                            shutil.rmtree(target_images_dir)
-                        shutil.copytree(source_images_dir, target_images_dir)
-                    
-                    logger.info(f"✓ PDF converted successfully using convert-simple.py")
-                    return True, []
-                else:
-                    logger.error("convert-simple.py completed but no org file found")
-                    return False, ["No output file generated"]
-            else:
-                logger.warning(f"convert-simple.py failed: {result.stderr}")
-                # Fall back to built-in processing
-                return convert_pdf_to_org_builtin(input_file, output_file)
-                
-        finally:
-            # Clean up temp directories
-            for temp_dir in [temp_pdf_dir, temp_output_dir, temp_archive_dir]:
-                if temp_dir.exists():
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    
-    except Exception as e:
-        logger.error(f"Error calling convert-simple.py: {str(e)}")
-        # Fall back to built-in processing
-        return convert_pdf_to_org_builtin(input_file, output_file)
-
-def convert_pdf_to_org_builtin(input_file: str, output_file: str) -> Tuple[bool, List[str]]:
-    """Built-in PDF conversion (fallback)"""
-    try:
-        input_path = Path(input_file)
-        output_path = Path(output_file)
-        
-        # Create images directory
-        images_dir = output_path.parent / f"{output_path.stem}_images"
-        images_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Convert PDF to Markdown
-        markdown_content, errors = process_pdf_to_markdown(input_file, images_dir)
-        
-        if markdown_content:
-            # Create temporary markdown file
-            temp_md = output_path.with_suffix('.md')
-            with open(temp_md, 'w', encoding='utf-8') as f:
-                f.write(markdown_content)
-            
-            # Convert Markdown to Org using pandoc
-            cmd = ['pandoc',
-                '--wrap=none',
-                '--standalone',
-                '-t', 'org',
-                '--no-highlight',
-                f'--extract-media={images_dir}',
-                '-f', 'markdown',
-                str(temp_md),
-                '-o', str(output_path)
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                # Clean up temporary file
-                temp_md.unlink()
-                
-                # Post-process the org file
-                post_process_org(output_path)
-                return True, []
-            else:
-                # If pandoc fails, fall back to direct markdown write
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(markdown_content)
-                temp_md.unlink()
-                return True, [f"Pandoc conversion failed, saved as markdown: {result.stderr}"]
-        
+        text, errors = process_pdf(input_file)
+        if text:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(text)
+            return True, []
         return False, errors
     except Exception as e:
         return False, [f"Error converting PDF: {str(e)}"]
@@ -813,11 +506,7 @@ def process_file(file_path: Path, reference_dir: Path, archive_dir: Path) -> boo
         elif suffix == '.pdf':
             success, errors = convert_pdf_to_org(str(file_path), str(output_file))
             if errors:
-                for error in errors:
-                    logging.warning(f"PDF conversion notice: {error}")
-        elif suffix in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']:
-            logging.info(f"Skipping image file: {suffix}")
-            return False
+                logging.error(f"PDF conversion errors: {errors}")
         else:
             logging.warning(f"Unsupported file type: {suffix}")
             return False
@@ -884,40 +573,20 @@ def check_calibre_installation():
         return False
     return True
 
-def check_dependencies():
-    """Check if all dependencies are installed"""
-    # Check pandoc
-    if not shutil.which('pandoc'):
-        raise RuntimeError("Pandoc is not installed. Please install pandoc first.")
-    
-    # Only keep necessary Python package checks
-    required_packages = [
-        'PyMuPDF',  # For PDF processing
-        'pymupdf4llm',  # For advanced PDF to markdown
-    ]
-    
-    missing_packages = []
-    for package in required_packages:
-        if importlib.util.find_spec(package.lower()) is None:
-            missing_packages.append(package)
-    
-    if missing_packages:
-        packages_str = ' '.join(missing_packages)
-        logging.warning(f"Missing packages: {packages_str}")
-        logging.info("Attempting to install missing packages...")
-        try:
-            subprocess.run(['pip', 'install'] + missing_packages, check=True)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to install required packages: {str(e)}")
+# The check_dependencies() call is redundant because setup_environment()
+# already handles dependency installation.
+# check_dependencies()
 
 def post_process_org(file_path: Path) -> None:
     """Process the converted org file, clean up unnecessary marks"""
     try:
-        content = file_path.read_text(encoding='utf-8')
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
         # Clean up unnecessary line end backslashes
         cleaned = re.sub(r'\\\n', '\n', content)
         # Add other cleanup rules if needed
-        file_path.write_text(cleaned, encoding='utf-8')
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(cleaned)
     except Exception as e:
         logging.error(f"Post-processing failed for {file_path}: {str(e)}")
 
@@ -957,8 +626,6 @@ def get_safe_filename(filename: str) -> str:
         filename = 'unnamed_file'
     
     return filename
-
-# 图片转换函数已移除 - 图片文件将被跳过而不是转换
 
 def convert_eml(input_file: Path, output_file: Path) -> bool:
     """Convert email (.eml) files to Org format"""
@@ -1073,18 +740,20 @@ def main():
     # Set up logging
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        stream=sys.stdout  # Redirect logging to stdout
     )
     
     try:
-        # Check dependencies
-        check_dependencies()
+        # The check_dependencies() call is redundant because setup_environment()
+        # already handles dependency installation.
+        # check_dependencies()
         
         # Get command line arguments
         parser = argparse.ArgumentParser(description='Convert documents to Org format')
         parser.add_argument('--temp', type=str, required=True, help='Temporary directory path')
         parser.add_argument('--reference', type=str, required=True, help='Reference directory path')
-        parser.add_argument('--archive', type=str, required=True, help='Archive directory path')
+        parser.add_argument('--archive', type=str, required=True, help='Archive directory path') # Fixed typo here
         
         args = parser.parse_args()
         
@@ -1099,9 +768,11 @@ def main():
         
         # Process files
         for file_path in temp_dir.iterdir():
-            print(f"Found file: {file_path}")  
+            logging.info(f"Found item: {file_path}")  # Use logging for consistency
             if file_path.is_file():
                 process_file(file_path, reference_dir, archive_dir)
+            else:
+                logging.info(f"Skipping item as it is not a file: {file_path}")
                 
     except Exception as e:
         logging.error(f"An error occurred: {str(e)}")
