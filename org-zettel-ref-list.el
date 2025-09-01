@@ -949,6 +949,7 @@ For example: Stallman__GNUEmacs==editor_lisp--reading-3.org"
                       (set-buffer-modified-p nil))))
                 ;; 使用计时器重新启动文件监控
                 (run-with-timer 0.5 nil #'org-zettel-ref-watch-directory))))))
+>>>>>>> c8183a8584d81f836655e0efb65c617f68249ad2
     ;; Save database and refresh display
     (org-zettel-ref-db-save db)
     (org-zettel-ref-list-refresh)
