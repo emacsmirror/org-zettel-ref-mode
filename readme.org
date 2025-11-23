@@ -418,6 +418,9 @@ We welcome community contributions! Here are some ways you can get involved:
 
 ** Changlog
 
+*** Version 0.6.1 (2025-07-28)
+  - Added: Hidden marker rendering for highlights. Markers can stay invisible while only the annotated text is colored, preserving anchors for jumps without visual clutter.
+
 *** Version 0.6.0 (2025-07-27)
   - Added: Highlight Display Format Options
     - New configuration option: `org-zettel-ref-highlight-format`, allowing users to choose the display format for highlights in overview files (headline, list, description list).

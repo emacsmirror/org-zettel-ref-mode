@@ -121,7 +121,8 @@ If tabulated-list-sort-key is nil or invalid, reset it to default (Modified, new
     (setq tabulated-list-sort-key (cons "Modified" t))
     (setq org-zettel-ref-list-multi-sort-keys (list (cons "Modified" t)))
     (setq tabulated-list-sort-key-function nil)
-    (message "Reset invalid sort key to default (Modified, newest first)")))
+    ;;(message "Reset invalid sort key to default (Modified, newest first)")
+    ))
 
 (defun org-zettel-ref-list-sort-by-column (&optional column)
   "Sort the list by COLUMN.
@@ -1113,8 +1114,8 @@ Example: (t 'source \"Deleted source file only.\") or (nil 'error \"Error messag
       (org-zettel-ref-list-refresh)
 
       ;; Report final outcome
-      (message "Deletion complete: %d source(s) only, %d overview(s) only, %d both, %d error(s)."
-               deleted-source deleted-overview deleted-both errors))))
+      ;;(message "Deletion complete: %d source(s) only, %d overview(s) only, %d both, %d error(s)."
+               deleted-source deleted-overview deleted-both errors)))
 
 (defun org-zettel-ref-list-cycle-status ()
   "Cycle through reading status for the current entry."
@@ -1450,9 +1451,8 @@ DB is the database object."
         (update-count 0)
         (skip-count 0)
         (added 0))
-    (message "Found %d files to process" (length files))
+    ;;(message "Found %d files to process" (length files))
     
-    ;; 设置标志防止递归调用
     (let ((org-zettel-ref-scanning-directory t))
       (dolist (file files)
         (let* ((file-path (expand-file-name file))
@@ -1497,11 +1497,11 @@ DB is the database object."
               
               ;; Save database every 100 entries
               (when (zerop (mod added 100))
-                (message "Saving database after %d new entries..." added)
+                ;;(message "Saving database after %d new entries..." added)
                 (org-zettel-ref-db-save db))))))
       
-      (message "Scan complete: %d new, %d updated, %d unchanged"
-               new-count update-count skip-count)
+      ;;(message "Scan complete: %d new, %d updated, %d unchanged"
+      ;;         new-count update-count skip-count)
       ;; Final save if there are any changes
       (when (or (> new-count 0) (> update-count 0))
         (org-zettel-ref-db-save db)))))

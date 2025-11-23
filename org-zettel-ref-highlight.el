@@ -93,6 +93,10 @@ Group 3: Content (for images including path and description)"
   :type 'string
   :group 'org-zettel-ref)
 
+(defcustom org-zettel-ref-highlight-hide-markers t
+  "If non-nil, hide inline highlight markers visually while keeping overlays."
+  :type 'boolean
+  :group 'org-zettel-ref)
 
 ;;----------------------------------------------------------------------------
 ;; Highlight ID
@@ -152,37 +156,56 @@ Group 3: Content (for images including path and description)"
 (defun org-zettel-ref-highlight-refresh ()
   "Refresh the display of all highlights in the current buffer."
   (interactive)
-  (message "Refreshing highlights...")
   (remove-overlays (point-min) (point-max) 'org-zettel-ref-highlight t)
   
   (save-excursion
     (goto-char (point-min))
     (while (re-search-forward org-zettel-ref-highlight-regexp nil t)
       (let* ((type-char (match-string 2))
-             (type (org-zettel-ref-highlight-char-to-type type-char)))
-        (message "DEBUG: Found mark with char '%s', mapped to type '%s'" 
-                type-char type)
+             (type (org-zettel-ref-highlight-char-to-type type-char))
+             (text (match-string 3))
+             (text-len (length text))
+             (marker-start (match-beginning 0))
+             (marker-end (match-end 0))
+             (pre-start (max (point-min) (- marker-start text-len)))
+             (pre-end (+ pre-start text-len))
+             (text-start (match-beginning 3))
+             (text-end (match-end 3))
+             (use-pre (and (<= pre-start pre-end)
+                           (<= pre-end marker-start)
+                           (string= (buffer-substring-no-properties pre-start pre-end) text)))
+             (visible-range (if use-pre
+                                (cons pre-start pre-end)
+                              (cons text-start text-end))))
         (let ((config (cdr (assoc type org-zettel-ref-highlight-types))))
-          (when config
-            (let ((ov (make-overlay (match-beginning 0) (match-end 0))))
-              (overlay-put ov 'org-zettel-ref-highlight t)
-              (overlay-put ov 'face (plist-get config :face)))))))))
+          (when (and config (car visible-range) (cdr visible-range))
+            ;; Overlay for the visible text (original region) with face only.
+            (let ((text-ov (make-overlay (car visible-range) (cdr visible-range))))
+              (overlay-put text-ov 'org-zettel-ref-highlight t)
+              (overlay-put text-ov 'face (plist-get config :face)))
+            ;; Overlay to hide marker/metadata while keeping the jump anchor.
+            (when org-zettel-ref-highlight-hide-markers
+              ;; Hide prefix: everything before the text payload.
+              (when (< marker-start text-start)
+                (let ((prefix-ov (make-overlay marker-start text-start)))
+                  (overlay-put prefix-ov 'org-zettel-ref-highlight t)
+                  (overlay-put prefix-ov 'org-zettel-ref-marker t)
+                  (overlay-put prefix-ov 'display "")))
+              ;; Hide suffix: everything after the text payload.
+              (when (< text-end marker-end)
+                (let ((suffix-ov (make-overlay text-end marker-end)))
+                  (overlay-put suffix-ov 'org-zettel-ref-highlight t)
+                  (overlay-put suffix-ov 'org-zettel-ref-marker t)
+                  (overlay-put suffix-ov 'display ""))))))))))
 
 (defun org-zettel-ref-toggle-target-display ()
   "Toggle whether to display target marks."
   (interactive)
-  (save-excursion
-    (goto-char (point-min))
-    (let ((showing nil))
-      (while (re-search-forward org-zettel-ref-highlight-regexp nil t)
-        (let* ((target-start (match-beginning 0))
-               (target-end (+ (match-end 1) 2))
-               (overlays (overlays-in target-start target-end)))
-          (dolist (ov overlays)
-            (when (overlay-get ov 'org-zettel-ref-highlight)
-              (setq showing (not (equal (overlay-get ov 'display) "")))
-              (overlay-put ov 'display (if showing "" nil))))))
-      (message "Target marks are now %s" (if showing "hidden" "visible")))))     
+  (setq org-zettel-ref-highlight-hide-markers
+        (not org-zettel-ref-highlight-hide-markers))
+  (org-zettel-ref-highlight-refresh)
+  (message "Highlight markers are now %s"
+           (if org-zettel-ref-highlight-hide-markers "hidden" "visible")))
 
 ;;----------------------------------------------------------------------------
 ;; Synchronization
