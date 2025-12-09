@@ -136,6 +136,13 @@ Before annotating or marking text in the org file for the first time, you can us
 2. `M-x org-zettel-ref-quick-markup`
 3. Choose the markup style you prefer
 
+*** Context Menu Highlighting
+To use mouse-driven highlighting:
+1. Ensure `context-menu-mode` is enabled in your Emacs configuration: `(setq context-menu-mode t)` or `(context-menu-mode 1)`.
+2. Select the desired text in the source file.
+3. Right-click on the selected text.
+4. From the "Org Zettel Ref Highlight" context menu, choose the desired highlight type.
+
 *** Highlight Format Conversion
 
 org-zettel-ref-mode now supports converting highlights in overview files from the old headline format to the new list format.
@@ -418,8 +425,23 @@ We welcome community contributions! Here are some ways you can get involved:
 
 ** Changlog
 
+*** Version 0.6.3 (2025-12-05)
+  - Added: Full support for highlighting via context menu. Users can now right-click to apply highlights, with previous issues of visual text duplication and corruption resolved. Both direct commands and context menu actions now correctly replace selected text with highlight markers and display overlays reliably.
+
+*** Version 0.6.2 (2025-12-02)
+  - Fixed: Duplicate function definitions in `org-zettel-ref-list.el` that prevented auto-completion in renaming prompts (Title and Keywords).
+
 *** Version 0.6.1 (2025-07-28)
   - Added: Hidden marker rendering for highlights. Markers can stay invisible while only the annotated text is colored, preserving anchors for jumps without visual clutter.
+  - Added: In single-file mode, opening the unified overview file now auto-activates org-zettel-ref overlays and locals, even if it’s opened directly before the source buffer.
+  - Added: Minibuffer preview for highlight types (color + prefix) when selecting a type (annotations + affixation for common completion UIs).
+  - Added: If the overview/annotation file is already open, org-zettel-ref-init reuses it instead of opening a duplicate buffer.
+  - Added: Opening the list panel now splits the window (or reuses an existing window) instead of taking over the entire frame.
+  - Added: When the overview/annotation buffer exists but isn’t visible, org-zettel-ref-init now displays it automatically.
+  - Added: Minibuffer highlight previews now render with text properties enabled.
+  - Added: List panel display fallback ensures the panel is always shown (reuse, pop-up, or current window as last resort).
+  - Added: Highlight type completion shows annotated previews (prefix + colored sample) via completion annotations.
+  - Added: From source highlights, `C-c C-o` now jumps to the matching overview entry even when markers are hidden.
 
 *** Version 0.6.0 (2025-07-27)
   - Added: Highlight Display Format Options

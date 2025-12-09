@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'org-zettel-ref-core)
+(require 'org-zettel-ref-highlight)
 
 (defun org-zettel-ref-add-quick-note ()
   "Use highlight system to add a quick note."
@@ -26,9 +27,12 @@
       (let* ((beg (region-beginning))
              (end (region-end))
              (text (buffer-substring-no-properties beg end))
-             (type (completing-read "Select mark type: "
-                                  (mapcar #'car org-zettel-ref-highlight-types)
-                                  nil t))
+             (cands (org-zettel-ref--highlight-candidates))
+             (minibuffer-allow-text-properties t)
+             (choice (completing-read "Select mark type: "
+                                      (mapcar #'car cands)
+                                      nil t))
+             (type (cdr (assoc choice cands)))
              (type-char (org-zettel-ref-highlight-type-to-char type))
              (highlight-id (org-zettel-ref-highlight-generate-id)))
         (delete-region beg end)

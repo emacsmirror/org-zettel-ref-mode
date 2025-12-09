@@ -732,28 +732,6 @@ For example: Stallman__GNUEmacs==editor_lisp--reading-3.org"
     (completing-read prompt existing-authors
                     nil nil nil nil current-author)))
 
-(defun org-zettel-ref-rename--prompt-title (current-title)
-  "Prompt for title input, CURRENT-TITLE is the current title."
-  (read-string 
-   (format "Title%s: "
-           (if current-title
-               (format " (current: %s)" current-title)
-             ""))
-   current-title))
-
-(defun org-zettel-ref-rename--prompt-keywords (current-keywords)
-  "Prompt for keywords input, CURRENT-KEYWORDS is the current keywords."
-  (let ((current (if current-keywords
-                    (string-join current-keywords ", ")
-                  "")))
-    (split-string
-     (read-string 
-      (format "Keywords%s (comma-separated): "
-              (if current
-                  (format " (current: %s)" current)
-                ""))
-      current)
-     "[,\s]+" t)))
 
 (defun org-zettel-ref-list-rename-file ()
   "Rename the file at point."
@@ -950,7 +928,6 @@ For example: Stallman__GNUEmacs==editor_lisp--reading-3.org"
                       (set-buffer-modified-p nil))))
                 ;; 使用计时器重新启动文件监控
                 (run-with-timer 0.5 nil #'org-zettel-ref-watch-directory))))))
->>>>>>> c8183a8584d81f836655e0efb65c617f68249ad2
     ;; Save database and refresh display
     (org-zettel-ref-db-save db)
     (org-zettel-ref-list-refresh)
@@ -1349,8 +1326,30 @@ RATING should be a number between 0 and 5."
       (goto-char (point-min)))
     
     (org-zettel-ref-watch-directory)
-    (switch-to-buffer buffer)
-    buffer))
+    (let* ((existing-window (get-buffer-window buffer))
+           (target-window
+            (cond
+             (existing-window existing-window)
+             ;; If only one window, split to keep the current buffer visible.
+             ((one-window-p)
+              (let* ((src-window (selected-window))
+                     (src-width (window-width src-window))
+                     (target-width (max 40 (round (* src-width 0.4))))
+                     (new-window (split-window-right target-width)))
+                (set-window-buffer new-window buffer)
+                new-window))
+             (t
+              ;; Reuse a different window or pop up.
+              (or (display-buffer buffer '((display-buffer-reuse-window
+                                            display-buffer-pop-up-window)
+                                           (inhibit-same-window . t)))
+                  (progn
+                    ;; Fallback: show in current window to guarantee visibility.
+                    (switch-to-buffer buffer)
+                    (selected-window)))))))
+      (when (window-live-p target-window)
+        (select-window target-window))
+      buffer)))
 
 (defun org-zettel-ref-list-refresh ()
   "Refresh the reference list display."

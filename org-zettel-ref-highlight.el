@@ -1,5 +1,7 @@
 ;;; org-zettel-ref-highlight-simple.el --- Simple highlighting with target links -*- lexical-binding: t; -*-
 
+(require 'easymenu)
+
 ;;; Commentary:
 ;; Usage format:
 ;; <<hl-1>> §q{Highlighted text}  <- In the source file
@@ -84,6 +86,9 @@ Each type should have:
 (defvar-local org-zettel-ref-highlight-counter 0
   "Global counter for highlight marks.")
 
+(defvar-local org-zettel-ref-highlight--context-region nil
+  "Cached (BEG END POINT) of the most recent active region for mouse menus.")
+
 (defcustom org-zettel-ref-highlight-regexp
   "<<hl-\\([0-9]+\\)>> §\\([a-z]\\){\\([^}]+\\)}"
   "Regexp for matching highlight marks.
@@ -97,6 +102,70 @@ Group 3: Content (for images including path and description)"
   "If non-nil, hide inline highlight markers visually while keeping overlays."
   :type 'boolean
   :group 'org-zettel-ref)
+
+(defun org-zettel-ref--highlight-candidates ()
+  "Return list of (DISPLAY . TYPE) with inline preview for completion."
+  (let ((minibuffer-allow-text-properties t))
+    (mapcar
+     (lambda (type-def)
+       (let* ((type (car type-def))
+              (cfg (cdr type-def))
+              (prefix (or (plist-get cfg :prefix) ""))
+              (face (plist-get cfg :face))
+              (display (format "%-12s %s"
+                               (propertize type 'face face)
+                               (propertize prefix 'face face))))
+         (cons display type)))
+     org-zettel-ref-highlight-types)))
+
+(defun org-zettel-ref--highlight-id-at-point ()
+  "Return highlight ID at point based on `org-zettel-ref-highlight-regexp`."
+  (save-excursion
+    (let ((pos (point)))
+      (or
+       (when (re-search-backward org-zettel-ref-highlight-regexp nil t)
+         (when (and (>= pos (match-beginning 0))
+                    (<= pos (match-end 0)))
+           (match-string-no-properties 1)))
+       (when (re-search-forward org-zettel-ref-highlight-regexp nil t)
+         (when (and (>= pos (match-beginning 0))
+                    (<= pos (match-end 0)))
+           (match-string-no-properties 1)))))))
+
+(defun org-zettel-ref--goto-overview-highlight (hl-id)
+  "Open overview file and jump to highlight HL-ID. Return non-nil if handled."
+  (let* ((overview-file (or (and (boundp 'org-zettel-ref-overview-file)
+                                 org-zettel-ref-overview-file)
+                            (when org-zettel-ref-use-single-overview-file
+                              (expand-file-name org-zettel-ref-single-overview-file-path))))
+         (msg-prefix (format "Highlight %s" hl-id)))
+    (unless overview-file
+      (message "%s: no overview file associated; run org-zettel-ref-init first." msg-prefix)
+      (cl-return-from org-zettel-ref--goto-overview-highlight nil))
+    (let* ((buf (find-file-noselect overview-file))
+           (_ (pop-to-buffer buf)))
+      (goto-char (point-min))
+      (cond
+       ((re-search-forward (format "\\[\\[hl:%s\\]" (regexp-quote hl-id)) nil t)
+        (goto-char (match-beginning 0))
+        (org-reveal)
+        (message "%s opened in overview." msg-prefix)
+        t)
+       ((re-search-forward (format "hl-%s" (regexp-quote hl-id)) nil t)
+        (goto-char (match-beginning 0))
+        (org-reveal)
+        (message "%s opened in overview." msg-prefix)
+        t)
+       (t
+        (message "%s not found in overview %s" msg-prefix overview-file)
+        nil)))))
+
+(defun org-zettel-ref-open-highlight-at-point ()
+  "Open the overview entry corresponding to the highlight at point.
+Hook this into `org-open-at-point-functions` so `C-c C-o` works on hidden highlights."
+  (interactive)
+  (when-let ((hl-id (org-zettel-ref--highlight-id-at-point)))
+    (org-zettel-ref--goto-overview-highlight hl-id)))
 
 ;;----------------------------------------------------------------------------
 ;; Highlight ID
@@ -126,32 +195,103 @@ Group 3: Content (for images including path and description)"
 (defun org-zettel-ref-highlight-region (type)
   "Highlight the current region with the specified type TYPE."
   (interactive
-   (list (completing-read "Highlight type: "
-                         (mapcar #'car org-zettel-ref-highlight-types)
-                         nil t)))
+   (let* ((cands (org-zettel-ref--highlight-candidates))
+          (minibuffer-allow-text-properties t)
+          (choice (completing-read "Highlight type: "
+                                   (mapcar #'car cands)
+                                   nil t)))
+     (list (cdr (assoc choice cands)))))
+  (unless (use-region-p)
+    (user-error "Highlight requires an active region"))
   (message "Selected type: %s" type)
+  (org-zettel-ref-highlight--apply-bounds
+   type (region-beginning) (region-end) (point)))
+
+(defun org-zettel-ref-highlight--apply-bounds (type beg end point-pos)
+  "Core helper to highlight range between BEG and END using TYPE.
+POINT-POS captures where `point' was when the region was selected so we
+preserve the original inclusive semantics used by the interactive command."
+  (let* ((text (buffer-substring-no-properties beg end))
+         (highlight-id (org-zettel-ref-highlight-generate-id))
+         (type-char (org-zettel-ref-highlight-type-to-char type)))
+    (message "DEBUG: Using char '%s' for type '%s'" type-char type)
+    (delete-region beg end)
+    (goto-char beg)
+    (let ((insert-text (format "<<hl-%s>> §%s{%s}"
+                              highlight-id
+                              type-char
+                              text)))
+      (message "DEBUG: Inserting: %s" insert-text)
+      (insert insert-text))
+    (run-with-idle-timer 0 nil #'org-zettel-ref-highlight-refresh)))
+
+;;----------------------------------------------------------------------------
+;; Context Menu Support
+;;----------------------------------------------------------------------------
+
+(defun org-zettel-ref-highlight-context-apply (type &optional _click)
+  "Apply highlight TYPE on the current or most recent region.
+CLICK is ignored aside from satisfying the context-menu calling
+convention. When invoked interactively fallback to the regular prompt."
+  (interactive
+   (let* ((cands (org-zettel-ref--highlight-candidates))
+          (choice (completing-read "Highlight type: "
+                                   (mapcar #'car cands)
+                                   nil t)))
+     (list (cdr (assoc choice cands)))))
+  (let ((bounds (cond
+                 ((use-region-p)
+                  (list (region-beginning) (region-end) (point)))
+                 (org-zettel-ref-highlight--context-region
+                  org-zettel-ref-highlight--context-region)
+                 (t nil))))
+    (unless bounds
+      (user-error "Highlight requires an active region"))
+    (org-zettel-ref-highlight--apply-bounds
+     type (nth 0 bounds) (nth 1 bounds) (nth 2 bounds))))
+
+(defun org-zettel-ref-highlight--context-menu-command-symbol (type)
+  "Return a unique command symbol for TYPE.
+Create the command on the fly if it is not defined yet."
+  (let* ((type-str (if (symbolp type) (symbol-name type) type))
+         (sanitized (replace-regexp-in-string "[^[:alnum:]-]+" "-" type-str))
+         (sym-name (format "org-zettel-ref-highlight-context-%s" sanitized))
+         (sym (intern sym-name)))
+    (unless (fboundp sym)
+      (fset sym
+            (lambda (event)
+              (interactive "e")
+              (org-zettel-ref-highlight-context-apply type event))))
+    sym))
+
+(defun org-zettel-ref-highlight--context-menu-items (click)
+  "Build menu entries to highlight the current region at CLICK."
+  (mapcar
+   (lambda (type-def)
+     (let* ((type (car type-def))
+            (config (cdr type-def))
+            (name (or (plist-get config :name) type))
+            (prefix (plist-get config :prefix))
+            (label (if (and prefix (> (length prefix) 0))
+                       (format "%s %s" prefix name)
+                     name))
+            (command (org-zettel-ref-highlight--context-menu-command-symbol type)))
+       (vector label command :enable '(or (use-region-p)
+                                          org-zettel-ref-highlight--context-region))))
+   org-zettel-ref-highlight-types))
+
+(defun org-zettel-ref-highlight-context-menu (_menu click)
+  "Return a context menu for highlight commands triggered by CLICK."
+  (when (derived-mode-p 'org-mode)
+    (easy-menu-create-menu
+     "Org Zettel Ref Highlight"
+     (org-zettel-ref-highlight--context-menu-items click))))
+
+(defun org-zettel-ref-highlight--record-context-region ()
+  "Keep track of the most recent region for context menu workflows."
   (when (use-region-p)
-    (let* ((beg (region-beginning))
-           (end (region-end))
-           (end (if (= end (point))
-                   (min (point-max) (1+ end))
-                 end))
-           (text (buffer-substring-no-properties beg end))
-           (highlight-id (org-zettel-ref-highlight-generate-id))
-           (type-char (org-zettel-ref-highlight-type-to-char type)))
-      (message "DEBUG: Using char '%s' for type '%s'" type-char type)
-      
-      (delete-region beg end)
-      (goto-char beg)
-      (let ((insert-text (format "%s <<hl-%s>> §%s{%s}"
-                                text
-                                highlight-id
-                                type-char
-                                text)))
-        (message "DEBUG: Inserting: %s" insert-text)
-        (insert insert-text))
-      
-      (org-zettel-ref-highlight-refresh))))
+    (setq org-zettel-ref-highlight--context-region
+          (list (region-beginning) (region-end) (point)))))
 
 (defun org-zettel-ref-highlight-refresh ()
   "Refresh the display of all highlights in the current buffer."
@@ -555,6 +695,18 @@ Group 3: Content (for images including path and description)"
   (org-zettel-ref-highlight-initialize-counter)
   ;; 刷新显示
   (org-zettel-ref-highlight-refresh)
+  ;; Enable opening hidden highlights via org-open-at-point
+  (add-hook 'org-open-at-point-functions
+            #'org-zettel-ref-open-highlight-at-point
+            nil t)
+  ;; Provide right-click menu entries when available
+  (when (boundp 'context-menu-functions)
+    (add-hook 'context-menu-functions
+              #'org-zettel-ref-highlight-context-menu
+              nil t))
+  (add-hook 'post-command-hook
+            #'org-zettel-ref-highlight--record-context-region
+            nil t)
   ;; 显示当前配置状态
   (org-zettel-ref-debug-message-category 'highlight 
     "Highlight system setup complete. Use M-x org-zettel-ref-highlight-debug-config to check configuration."))

@@ -121,6 +121,9 @@ Choices:
 (defvar org-zettel-ref-init-hook nil
   "Hook run after `org-zettel-ref-init` completes successfully.")
 
+(defvar-local org-zettel-ref--auto-activated nil
+  "Internal flag to avoid re-activating the same buffer twice.")
+
 (defvar org-zettel-ref-db-initialized nil
   "Flag indicating whether the database has been initialized.")
 
@@ -798,6 +801,23 @@ Returns nil if no changes needed, or new filepath if changes required."
 ;; Initialization
 ;;------------------------------------------------------------------
 
+(defun org-zettel-ref--auto-activate-single-overview ()
+  "Auto-activate when visiting the single overview file.
+Ensures overlays and local vars are set even if opened directly."
+  (when (and org-zettel-ref-use-single-overview-file
+             (not org-zettel-ref--auto-activated)
+             (buffer-file-name)
+             (string= (expand-file-name (buffer-file-name))
+                      (expand-file-name org-zettel-ref-single-overview-file-path)))
+    (setq org-zettel-ref--auto-activated t)
+    (org-zettel-ref--activate-buffer (current-buffer))
+    (setq-local org-zettel-ref-overview-file (buffer-file-name))
+    (setq-local org-zettel-ref-overview-buffer (current-buffer))
+    (setq org-zettel-ref-current-overview-buffer (current-buffer))
+    (org-zettel-ref-highlight-setup)))
+
+(add-hook 'org-mode-hook #'org-zettel-ref--auto-activate-single-overview)
+
 (defun org-zettel-ref-init ()
   "Initialize org-zettel-ref for current buffer."
   (interactive)
@@ -810,9 +830,18 @@ Returns nil if no changes needed, or new filepath if changes required."
         (let* ((overview-file (cdr entry-pair))
                (overview-buffer-name (format "*Overview: %s*" 
                                           (file-name-base (buffer-file-name))))
-               (overview-buffer (org-zettel-ref-setup-overview-window 
-                               overview-file 
-                               overview-buffer-name)))
+               (existing-overview (get-file-buffer overview-file))
+               (overview-buffer (or existing-overview
+                                    (org-zettel-ref-setup-overview-window 
+                                     overview-file 
+                                     overview-buffer-name))))
+          ;; If the overview buffer exists but is not displayed, show it.
+          (when (and overview-buffer
+                     (not (get-buffer-window overview-buffer)))
+            (display-buffer overview-buffer
+                            '((display-buffer-reuse-window
+                               display-buffer-pop-up-window)
+                              (inhibit-same-window . t))))
           (message "DEBUG: Created overview buffer: %s" overview-buffer)
           
           ;; Activate buffers
